@@ -39,7 +39,10 @@ local footer = {
 
 local leader = "SPC"
 
-local button_width = 50
+local dashboard_width = 50
+local function set_width(width)
+    dashboard_width = width
+end
 
 --- @param sc string
 --- @param txt string
@@ -52,7 +55,7 @@ local function button(sc, txt, keybind, keybind_opts)
         position = "center",
         shortcut = sc,
         cursor = 3,
-        width = button_width,
+        width = dashboard_width,
         align_shortcut = "right",
         hl_shortcut = "Keyword",
     }
@@ -111,6 +114,7 @@ local config = {
 }
 
 return {
+    set_width = set_width,
     button = button,
     section = section,
     config = config,
