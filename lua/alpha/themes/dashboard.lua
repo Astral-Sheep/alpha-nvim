@@ -39,6 +39,8 @@ local footer = {
 
 local leader = "SPC"
 
+local button_width = 50
+
 --- @param sc string
 --- @param txt string
 --- @param keybind string? optional
@@ -50,7 +52,7 @@ local function button(sc, txt, keybind, keybind_opts)
         position = "center",
         shortcut = sc,
         cursor = 3,
-        width = 50,
+        width = button_width,
         align_shortcut = "right",
         hl_shortcut = "Keyword",
     }
