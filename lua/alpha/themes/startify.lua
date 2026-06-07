@@ -1,8 +1,10 @@
 local utils = require("alpha.utils")
 
+--- Mutable theme table; closures read fields here so user config (e.g. mru_sections) applies.
+local startify = {}
+
 local if_nil = vim.F.if_nil
 local fnamemodify = vim.fn.fnamemodify
-local filereadable = vim.fn.filereadable
 
 local default_header = {
     type = "text",
@@ -22,6 +24,27 @@ local default_header = {
 }
 
 local leader = "SPC"
+
+local git_info = { is_git = false, branch = nil }
+local _git_cwd = nil
+
+local function update_git_info()
+    local cwd = vim.fn.getcwd()
+    if cwd == _git_cwd then return end
+    _git_cwd = cwd
+    local git_root = utils.git_worktree_root(cwd)
+    if not git_root then
+        git_info = { is_git = false, branch = nil }
+        return
+    end
+    local branch = vim.fn.systemlist({ "git", "-C", cwd, "branch", "--show-current" })[1]
+    git_info = {
+        is_git = true,
+        branch = (branch and branch ~= "") and branch or nil,
+    }
+end
+
+
 
 --- @param sc string
 --- @param txt string
@@ -66,18 +89,7 @@ local file_icons = {
 }
 
 local function icon(fn)
-    if file_icons.provider ~= "devicons" and file_icons.provider ~= "mini" then
-        vim.notify("Alpha: Invalid file icons provider: " .. file_icons.provider .. ", disable file icons", vim.log.levels.WARN)
-        file_icons.enabled = false
-        return "", ""
-    end
-
-    local ico, hl = utils.get_file_icon(file_icons.provider, fn)
-    if ico == "" then
-        file_icons.enabled = false
-        vim.notify("Alpha: Mini icons or devicons get icon failed, disable file icons", vim.log.levels.WARN)
-    end
-    return ico, hl
+    return utils.get_icon(file_icons, fn)
 end
 
 local function file_button(fn, sc, short_fn, autocd)
@@ -118,31 +130,14 @@ local mru_opts = {
     autocd = false
 }
 
---- @param start number
---- @param cwd string? optional
---- @param items_number number? optional number of items to generate, default = 10
-local function mru(start, cwd, items_number, opts)
+local function mru_git(start, cwd, items_number, opts)
     opts = opts or mru_opts
     items_number = if_nil(items_number, 10)
-    local oldfiles = {}
-    for _, v in pairs(vim.v.oldfiles) do
-        if #oldfiles == items_number then
-            break
-        end
-        local cwd_cond
-        if not cwd then
-            cwd_cond = true
-        else
-            cwd_cond = vim.startswith(v, cwd)
-        end
-        local ignore = (opts.ignore and opts.ignore(v, utils.get_extension(v))) or false
-        if (filereadable(v) == 1) and cwd_cond and not ignore then
-            oldfiles[#oldfiles + 1] = v
-        end
-    end
+
+    local found = utils.get_git_files(cwd, items_number, opts.ignore)
 
     local tbl = {}
-    for i, fn in ipairs(oldfiles) do
+    for i, fn in ipairs(found) do
         local short_fn
         if cwd then
             short_fn = fnamemodify(fn, ":.")
@@ -159,8 +154,53 @@ local function mru(start, cwd, items_number, opts)
     }
 end
 
-local function mru_title()
-    return "MRU " .. vim.fn.getcwd()
+local function mru(start, cwd, items_number, opts)
+    opts = opts or mru_opts
+    items_number = if_nil(items_number, 10)
+
+    local found = utils.get_mru(cwd, items_number, opts.ignore)
+
+    local tbl = {}
+    for i, fn in ipairs(found) do
+        local short_fn
+        if cwd then
+            short_fn = fnamemodify(fn, ":.")
+        else
+            short_fn = fnamemodify(fn, ":~")
+        end
+        local file_button_el = file_button(fn, tostring(i + start - 1), short_fn, opts.autocd)
+        tbl[i] = file_button_el
+    end
+    return {
+        type = "group",
+        val = tbl,
+        opts = {},
+    }
+end
+
+local function make_git_title_el(opts)
+    local cwd_short = fnamemodify(vim.fn.getcwd(), ":~")
+    local branch = git_info.branch
+    if branch then
+        local head = "MRU " .. cwd_short .. " "
+        return {
+            type = "text",
+            val = head .. branch,
+            opts = vim.tbl_extend("force", {
+                hl = {
+                    { "SpecialComment", 0,     #head },
+                    { "Label",          #head, #head + #branch },
+                },
+                shrink_margin = false,
+            }, opts or {}),
+        }
+    else
+        return {
+            type = "text",
+            val = "MRU " .. cwd_short,
+            opts = vim.tbl_extend("force", { hl = "SpecialComment", shrink_margin = false }, opts or {}),
+        }
+    end
 end
 
 local section = {
@@ -182,7 +222,7 @@ local section = {
         type = "group",
         val = {
             { type = "padding", val = 1 },
-            { type = "text", val = "MRU", opts = { hl = "SpecialComment" } },
+            { type = "text",    val = "MRU", opts = { hl = "SpecialComment" } },
             { type = "padding", val = 1 },
             {
                 type = "group",
@@ -194,18 +234,37 @@ local section = {
     },
     mru_cwd = {
         type = "group",
-        val = {
-            { type = "padding", val = 1 },
-            { type = "text", val = mru_title, opts = { hl = "SpecialComment", shrink_margin = false } },
-            { type = "padding", val = 1 },
-            {
-                type = "group",
-                val = function()
-                    return { mru(0, vim.fn.getcwd()) }
-                end,
-                opts = { shrink_margin = false },
-            },
-        },
+        val = function()
+            local cwd = vim.fn.getcwd()
+            return {
+                { type = "padding", val = 1 },
+                { type = "text",    val = "MRU " .. fnamemodify(cwd, ":~"), opts = { hl = "SpecialComment", shrink_margin = false } },
+                { type = "padding", val = 1 },
+                {
+                    type = "group",
+                    val = function() return { mru(0, cwd) } end,
+                    opts = { shrink_margin = false },
+                },
+            }
+        end,
+    },
+    mru_git = {
+        type = "group",
+        val = function()
+            update_git_info()
+            return {
+                { type = "padding", val = 1 },
+                make_git_title_el(),
+                { type = "padding", val = 1 },
+                {
+                    type = "group",
+                    val = function()
+                        return { mru_git(0, vim.fn.getcwd()) }
+                    end,
+                    opts = { shrink_margin = false },
+                },
+            }
+        end,
     },
     bottom_buttons = {
         type = "group",
@@ -219,14 +278,26 @@ local section = {
     },
 }
 
+startify.mru_sections = { "mru_cwd", "mru" }
+
 local config = {
     layout = {
         { type = "padding", val = 1 },
         section.header,
         { type = "padding", val = 2 },
         section.top_buttons,
-        section.mru_cwd,
-        section.mru,
+        {
+            type = "group",
+            val = function()
+                local result = {}
+                for _, name in ipairs(startify.mru_sections) do
+                    if section[name] then
+                        table.insert(result, section[name])
+                    end
+                end
+                return result
+            end,
+        },
         { type = "padding", val = 1 },
         section.bottom_buttons,
         section.footer,
@@ -238,7 +309,10 @@ local config = {
             vim.api.nvim_create_autocmd('DirChanged', {
                 pattern = '*',
                 group = "alpha_temp",
-                callback = function ()
+                callback = function()
+                    utils.mru_cache = {}
+                    utils.git_toplevel_cache = {}
+                    _git_cwd = nil
                     require('alpha').redraw()
                     vim.cmd('AlphaRemap')
                 end,
@@ -247,19 +321,17 @@ local config = {
     },
 }
 
-return {
-    icon = icon,
-    button = button,
-    file_button = file_button,
-    mru = mru,
-    mru_opts = mru_opts,
-    section = section,
-    config = config,
-    -- theme config
-    file_icons = file_icons,
-    -- deprecated
-    nvim_web_devicons = file_icons,
-    leader = leader,
-    -- deprecated
-    opts = config,
-}
+startify.icon = icon
+startify.button = button
+startify.file_button = file_button
+startify.mru = mru
+startify.mru_git = mru_git
+startify.mru_opts = mru_opts
+startify.section = section
+startify.config = config
+startify.file_icons = file_icons
+startify.nvim_web_devicons = file_icons
+startify.leader = leader
+startify.opts = config
+
+return startify

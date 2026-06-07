@@ -25,22 +25,33 @@ local format_line = function(line, max_width)
     local words = {}
     local target = "%S+"
     for word in line:gmatch(target) do
-        table.insert(words, word)
+        words[#words + 1] = word
     end
 
-    local bufstart = " "
-    local buffer = bufstart
+    local buf_words = {}
+    local buf_len = 1 -- accounts for the leading space
+    local n_words = #words
     for i, word in ipairs(words) do
-        if (#buffer + #word) <= max_width then
-            buffer = buffer .. word .. " "
-            if i == #words then
-                table.insert(formatted_line, buffer:sub(1, -2))
-            end
+        if buf_len + #word <= max_width then
+            buf_words[#buf_words + 1] = word
+            buf_len = buf_len + #word + 1
         else
-            table.insert(formatted_line, buffer:sub(1, -2))
-            buffer = bufstart .. word .. " "
-            if i == #words then
-                table.insert(formatted_line, buffer:sub(1, -2))
+            -- flush current buffer
+            if #buf_words > 0 then
+                table.insert(formatted_line, " " .. table.concat(buf_words, " "))
+            else
+                table.insert(formatted_line, "")
+            end
+            -- reset with the word that didn't fit
+            buf_words = { word }
+            buf_len = 1 + #word + 1
+        end
+        -- flush whatever remains at end of words
+        if i == n_words then
+            if #buf_words > 0 then
+                table.insert(formatted_line, " " .. table.concat(buf_words, " "))
+            else
+                table.insert(formatted_line, "")
             end
         end
     end
@@ -62,14 +73,13 @@ local format_fortune = function(fortune, max_width)
     local formatted_fortune = { " " } -- adds spacing between alpha-menu and footer
     for _, line in ipairs(fortune) do
         local formatted_line = format_line(line, max_width)
-        formatted_fortune = list_extend(formatted_fortune, formatted_line)
+        list_extend(formatted_fortune, formatted_line)
     end
     return formatted_fortune
 end
 
 local get_fortune = function(fortune_list)
     -- selects an entry from fortune_list randomly
-    math.randomseed(os.time())
     local ind = math.random(1, #fortune_list)
     return fortune_list[ind]
 end
